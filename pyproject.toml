@@ -1,12 +1,12 @@
 [tool.poetry]
-name = "eagle-export"
+name = "eagle-exporter"
 version = "0.1.0"
 description = "CLI tool and library for exporting metadata from Eagle app JSON into parquet or huggingface dataset."
 authors = ["yada <trojblue@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 packages = [
-    { include = "eagle_export", from = "src" }
+    { include = "eagle_exporter", from = "src" }
 ]
 
 
