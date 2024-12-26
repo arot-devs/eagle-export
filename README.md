@@ -71,3 +71,14 @@ eagle-export path/to/my_eagle.library --s5cmd /path/to/s5cmd.txt --to /tmp/outpu
 - The core functionality resides in `src/eagle_export/core.py`.
 - The CLI is in `src/eagle_export/cli.py`.
 - The library uses `click` for the command line, `pandas` for data manipulation, and `datasets` for pushing to Hugging Face.
+
+### Building and publishing
+
+To build and publish the repo, run the following commands:
+
+```bash
+python -m pip install build twine
+python -m build
+twine check dist/*
+twine upload dist/*
+```
