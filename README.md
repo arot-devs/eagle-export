@@ -13,31 +13,18 @@
 
 ## Installation
 
-1. Install Poetry if you haven't already:
+
    ```bash
-   pip install poetry
-	```
-
-2. Clone this repo or download the source, then inside the folder:
-
-```bash
-   poetry install
-```
-
-3. (Optional) You can install it system-wide using:
-
-   ```
-   pipx install .
+pip install eagle-exporter
    ```
 
-   Then you'll have the `eagle-export` command available globally.
 
 ## Usage
 
 Example command to export an Eagle library to Hugging Face:
 
    ```bash
-eagle-export path/to/my_eagle.library --to myuser/my_hf_dataset --hf-private
+eagle-export path/to/my_eagle.library --to myuser/my_hf_dataset --hf-public
    ```
 
 Or export to a local `.parquet` file:
@@ -62,7 +49,7 @@ eagle-export path/to/my_eagle.library --s5cmd /path/to/s5cmd.txt --to /tmp/outpu
   - If `<DEST>` ends with `.parquet`, will export to Parquet.
   - Otherwise, treats `<DEST>` as a Hugging Face dataset name (e.g. `username/datasetname`).
   
-- `--hf-private` (optional): If exporting to Hugging Face, mark it as private.
+- `--hf-public` (optional): If exporting to Hugging Face, mark it as public.
 
 - `--help`: Show the help message.
 
