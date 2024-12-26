@@ -5,20 +5,15 @@ import pandas as pd
 from typing import Optional, List
 from datasets import Dataset
 
+import unibox as ub
+
 def load_eagle_jsons(eagle_img_dir: str) -> List[dict]:
     """
-    Scans eagle_img_dir for .json files and loads each into a Python dict.
+    Scans eagle_img_dir and its subdirectories for .json files and loads each into a Python dict.
     """
-    pattern = os.path.join(eagle_img_dir, "*.json")
-    json_files = glob.glob(pattern)
-    results = []
-
-    for jf in json_files:
-        with open(jf, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            results.append(data)
-
-    return results
+    # Use **/*.json for recursive globbing
+    json_files = ub.traverses(eagle_img_dir, ["metadata.json"])
+    return ub.concurrent_loads(json_files)
 
 def preprocess_dict(data: dict) -> dict:
     """
