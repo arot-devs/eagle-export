@@ -24,19 +24,19 @@ pip install eagle-exporter
 Example command to export an Eagle library to Hugging Face:
 
    ```bash
-eagle-export path/to/my_eagle.library --to myuser/my_hf_dataset --hf-public
+eagle-exporter path/to/my_eagle.library --to myuser/my_hf_dataset --hf-public
    ```
 
 Or export to a local `.parquet` file:
 
 ```bash
-eagle-export path/to/my_eagle.library --to /tmp/output.parquet
+eagle-exporter path/to/my_eagle.library --to /tmp/output.parquet
 ```
 
 Optionally include an s5cmd file to attach S3 URIs:
 
 ```bash
-eagle-export path/to/my_eagle.library --s5cmd /path/to/s5cmd.txt --to /tmp/output.parquet
+eagle-exporter path/to/my_eagle.library --s5cmd /path/to/s5cmd.txt --to /tmp/output.parquet
 ```
 
 ### Command-Line Arguments
