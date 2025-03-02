@@ -2,9 +2,11 @@ import os
 import json
 import glob
 import pandas as pd
-from typing import Optional, List
-from datasets import Dataset
-
+from typing import Optional, List, Dict, Union, Any
+from datasets import Dataset, Features, Image
+from PIL import Image as PILImage
+import io
+from tqdm import tqdm
 import unibox as ub
 
 def load_eagle_jsons(eagle_img_dir: str) -> List[dict]:
@@ -105,29 +107,177 @@ def add_s3_uri_col(df: pd.DataFrame, s5cmd_file: Optional[str]) -> pd.DataFrame:
     merged_df = df.merge(df_s5, on="filename", how="left")
     return merged_df
 
-def build_dataframe(eagle_dir: str, s5cmd_file: Optional[str] = None) -> pd.DataFrame:
+def find_image_path(eagle_dir: str, folder_id: str, filename: str) -> Optional[str]:
+    """
+    Finds the actual image path within an Eagle library directory.
+    
+    Args:
+        eagle_dir: Path to Eagle library directory
+        folder_id: The folder ID from the metadata
+        filename: The filename including extension
+        
+    Returns:
+        Full path to the image file or None if not found
+    """
+    # The actual image is typically stored in a subfolder with the folder ID
+    image_dir = os.path.join(eagle_dir, "images", folder_id)
+    
+    # Check if the directory exists
+    if not os.path.exists(image_dir):
+        return None
+    
+    # Try to find the exact file
+    image_path = os.path.join(image_dir, filename)
+    if os.path.exists(image_path):
+        return image_path
+    
+    # If not found, try a case-insensitive match (common issue with extensions)
+    for file in os.listdir(image_dir):
+        if file.lower() == filename.lower():
+            return os.path.join(image_dir, file)
+    
+    return None
+
+def load_image(image_path: str) -> Optional[bytes]:
+    """
+    Load an image file and return its bytes.
+    
+    Args:
+        image_path: Full path to the image file
+        
+    Returns:
+        Image bytes or None if loading fails
+    """
+    try:
+        with open(image_path, 'rb') as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error loading image {image_path}: {e}")
+        return None
+
+def add_images(df: pd.DataFrame, eagle_dir: str, include_images: bool = False) -> pd.DataFrame:
+    """
+    Adds image paths and optionally loads the actual images.
+    
+    Args:
+        df: DataFrame with metadata
+        eagle_dir: Path to Eagle library directory
+        include_images: If True, loads the actual images as bytes
+        
+    Returns:
+        DataFrame with added image information
+    """
+    if not include_images:
+        # Just add image paths without loading images
+        df['image_path'] = df.apply(
+            lambda row: find_image_path(eagle_dir, row.get('folders', [''])[0], row['filename']), 
+            axis=1
+        )
+        return df
+    
+    # Add both paths and image data
+    image_data = []
+    
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Loading images"):
+        folder_id = row.get('folders', [''])[0]
+        filename = row['filename']
+        image_path = find_image_path(eagle_dir, folder_id, filename)
+        
+        if image_path:
+            image_bytes = load_image(image_path)
+            image_data.append({
+                'image_path': image_path,
+                'image': image_bytes if image_bytes else None
+            })
+        else:
+            image_data.append({
+                'image_path': None,
+                'image': None
+            })
+    
+    # Add image info to DataFrame
+    image_df = pd.DataFrame(image_data)
+    return pd.concat([df.reset_index(drop=True), image_df.reset_index(drop=True)], axis=1)
+
+def build_dataframe(eagle_dir: str, s5cmd_file: Optional[str] = None, include_images: bool = False) -> pd.DataFrame:
     """
     Main function to build the final metadata DataFrame from an Eagle library path.
+    
+    Args:
+        eagle_dir: Path to Eagle library directory
+        s5cmd_file: Optional path to s5cmd file for S3 URIs
+        include_images: If True, loads the actual images
+        
+    Returns:
+        DataFrame with metadata and optionally images
     """
     # Eagle library images path
     eagle_img_dir = os.path.join(eagle_dir, "images")
     eagle_jsons = load_eagle_jsons(eagle_img_dir)
     df_cleaned = eagle_jsons_to_df(eagle_jsons)
-    df_merged = add_s3_uri_col(df_cleaned, s5cmd_file)
-    return df_merged
+    df_with_s3 = add_s3_uri_col(df_cleaned, s5cmd_file)
+    df_with_images = add_images(df_with_s3, eagle_dir, include_images)
+    return df_with_images
 
 def export_parquet(df: pd.DataFrame, output_path: str):
     """
     Exports a DataFrame to a Parquet file.
+    Note: If 'image' column exists, it will be dropped as binary data
+    is not well-suited for Parquet format.
     """
-    df.to_parquet(output_path, index=False)
+    # Make a copy to avoid modifying the original DataFrame
+    export_df = df.copy()
+    
+    # Drop binary image data if present
+    if 'image' in export_df.columns:
+        export_df = export_df.drop(columns=['image'])
+        print("Note: Image binary data was removed for Parquet export.")
+    
+    export_df.to_parquet(output_path, index=False)
     print(f"Saved parquet to: {output_path}")
 
 def export_huggingface(df: pd.DataFrame, repo_id: str, private: bool = False):
     """
     Exports a DataFrame to a Hugging Face dataset (push_to_hub).
+    If 'image' column exists, it will be properly formatted as a Dataset
+    with image features.
+    
+    Args:
+        df: DataFrame with metadata and optionally images
+        repo_id: Hugging Face repository ID
+        private: If True, the dataset will be private
     """
-    from datasets import Dataset
-    dataset = Dataset.from_pandas(df)
+    from datasets import Dataset, Features, Value, Image as DSImage
+    
+    # Check if we have image data
+    has_images = 'image' in df.columns and any(df['image'].notna())
+    
+    if has_images:
+        # Convert binary image data to PIL images
+        images = []
+        for img_bytes in tqdm(df['image'], desc="Processing images for HF"):
+            if img_bytes is not None:
+                try:
+                    # Convert bytes to PIL Image
+                    img = PILImage.open(io.BytesIO(img_bytes))
+                    images.append(img)
+                except Exception:
+                    images.append(None)
+            else:
+                images.append(None)
+        
+        # Create a new DataFrame without the original binary data
+        hf_df = df.drop(columns=['image']).copy()
+        hf_df['image'] = images
+        
+        # Create dataset with proper image features
+        features = Features({
+            'image': DSImage() if has_images else None
+        })
+        
+        dataset = Dataset.from_pandas(hf_df)
+    else:
+        dataset = Dataset.from_pandas(df)
+    
     result = dataset.push_to_hub(repo_id, private=private)
     print(f"Pushed to Hugging Face: {result}")

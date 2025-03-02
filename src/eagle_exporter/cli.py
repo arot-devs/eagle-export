@@ -5,7 +5,7 @@ import click
 from .core import build_dataframe, export_parquet, export_huggingface
 
 
-def export_metadata(eagle_dir, s5cmd, dest, hf_public):
+def export_metadata(eagle_dir, s5cmd, dest, hf_public, include_images):
     """
     Core function for exporting Eagle metadata.
     """
@@ -14,7 +14,7 @@ def export_metadata(eagle_dir, s5cmd, dest, hf_public):
         raise FileNotFoundError(f"Directory '{eagle_dir}' does not exist.")
 
     # Build the main DataFrame
-    df = build_dataframe(eagle_dir, s5cmd)
+    df = build_dataframe(eagle_dir, s5cmd, include_images)
 
     # Export based on destination type
     if dest.lower().endswith(".parquet"):
@@ -32,8 +32,19 @@ def export_metadata(eagle_dir, s5cmd, dest, hf_public):
               help="Destination: either a .parquet filename or a Hugging Face repo id (e.g. user/dataset).")
 @click.option("--hf-public", is_flag=True,
               help="If exporting to Hugging Face, make the dataset public.")
-def main(eagle_dir, s5cmd, dest, hf_public):
+@click.option("--include-images", is_flag=True,
+              help="Include the actual image files in the export (only useful for Hugging Face exports).")
+def main(eagle_dir, s5cmd, dest, hf_public, include_images):
     """
     CLI entry point for exporting metadata.
+    
+    EAGLE_DIR should point to an Eagle library directory (the folder containing 'images/').
+    
+    Examples:
+        # Export to Parquet file
+        eagle-exporter path/to/eagle.library --to output.parquet
+        
+        # Export to Hugging Face with images included
+        eagle-exporter path/to/eagle.library --to username/dataset --hf-public --include-images
     """
-    export_metadata(eagle_dir, s5cmd, dest, hf_public)
+    export_metadata(eagle_dir, s5cmd, dest, hf_public, include_images)

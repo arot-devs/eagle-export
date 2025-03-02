@@ -7,25 +7,30 @@
 - Recursively scans an Eagle library's `images/` folder for JSON files.
 - Extracts tags, star ratings, palette info, etc.
 - Optionally merges with [s5cmd](https://github.com/peak/s5cmd) logs to provide S3 URIs for each file.
+- **NEW:** Can include the actual image data when exporting to Hugging Face datasets.
 - Exports to either:
   - A local `.parquet` file  
   - A Hugging Face dataset (can be public or private).
 
 ## Installation
 
-
-   ```bash
+```bash
 pip install eagle-exporter
-   ```
-
+```
 
 ## Usage
 
 Example command to export an Eagle library to Hugging Face:
 
-   ```bash
+```bash
 eagle-exporter path/to/my_eagle.library --to myuser/my_hf_dataset --hf-public
-   ```
+```
+
+Export to Hugging Face with image data included:
+
+```bash
+eagle-exporter path/to/my_eagle.library --to myuser/my_hf_dataset --hf-public --include-images
+```
 
 Or export to a local `.parquet` file:
 
@@ -51,6 +56,8 @@ eagle-exporter path/to/my_eagle.library --s5cmd /path/to/s5cmd.txt --to /tmp/out
   
 - `--hf-public` (optional): If exporting to Hugging Face, mark it as public.
 
+- `--include-images` (optional): Include the actual image files in the export. This is particularly useful for Hugging Face exports. Note that binary image data will be excluded from Parquet exports.
+
 - `--help`: Show the help message.
 
 ## Developer Notes
@@ -58,6 +65,7 @@ eagle-exporter path/to/my_eagle.library --s5cmd /path/to/s5cmd.txt --to /tmp/out
 - The core functionality resides in `src/eagle_exporter/core.py`.
 - The CLI is in `src/eagle_exporter/cli.py`.
 - The library uses `click` for the command line, `pandas` for data manipulation, and `datasets` for pushing to Hugging Face.
+- Image processing is handled using Pillow (PIL).
 
 ### Building and publishing
 
