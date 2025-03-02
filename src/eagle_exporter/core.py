@@ -4,7 +4,7 @@ import glob
 import io
 import pandas as pd
 from typing import Optional, List, Dict, Union, Any
-from datasets import Dataset, Features, Image as DSImage
+from datasets import Dataset, DatasetDict, Features, Image as DSImage
 from PIL import Image as PILImage
 from tqdm import tqdm
 import unibox as ub
@@ -157,37 +157,37 @@ def load_image(image_path: str) -> Optional[bytes]:
 
 def add_images(df: pd.DataFrame, include_images: bool = False) -> pd.DataFrame:
     """
-    Adds image paths and optionally loads the actual images as raw bytes.
-    Uses the 'metadata_json_path' column to locate the image next to each metadata.json.
-    """
-    if not include_images:
-        df['image_path'] = df.apply(
-            lambda row: get_image_path_from_metadata_path(
-                row["metadata_json_path"],
-                row["filename"]
-            ),
-            axis=1
-        )
-        return df
+    Adds an 'image_path' column. If include_images=True, also loads the
+    image bytes into a dictionary {'bytes': ...} under 'image'.
     
-    # Otherwise, also load the actual image data
+    NOTE: We now keep this "bytes" approach only for local usage
+    (e.g. if you're eventually exporting to a Parquet or just storing the DF).
+    For Hugging Face, we will ignore these bytes and do the HF-based approach 
+    in export_huggingface().
+    """
+    # Always add an image_path column
+    df['image_path'] = df.apply(
+        lambda row: get_image_path_from_metadata_path(
+            row["metadata_json_path"],
+            row["filename"]
+        ),
+        axis=1
+    )
+
+    if not include_images:
+        return df
+
+    # Otherwise, also load the actual image data as bytes in 'image'
     image_data = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Loading images"):
-        image_path = get_image_path_from_metadata_path(row["metadata_json_path"], row["filename"])
-        if image_path:
-            img_bytes = load_image(image_path)
-            hf_img_bytes = {
-                'bytes': img_bytes
-            }
-            image_data.append({
-                'image_path': image_path,
-                'image': hf_img_bytes
-            })
+        if row["image_path"] is not None:
+            img_bytes = load_image(row["image_path"])
+            if img_bytes is not None:
+                image_data.append({'image': {'bytes': img_bytes}})
+            else:
+                image_data.append({'image': None})
         else:
-            image_data.append({
-                'image_path': None,
-                'image': None
-            })
+            image_data.append({'image': None})
 
     image_df = pd.DataFrame(image_data)
     return pd.concat([df.reset_index(drop=True), image_df.reset_index(drop=True)], axis=1)
@@ -202,7 +202,7 @@ def build_dataframe(eagle_dir: str,
     Args:
         eagle_dir: Path to Eagle library directory (folder that contains images/ subdir)
         s5cmd_file: Optional path to an s5cmd file for injecting S3 URIs
-        include_images: If True, loads the actual images from disk as bytes.
+        include_images: If True, loads the actual images from disk as bytes (for local usage).
     """
     eagle_img_dir = os.path.join(eagle_dir, "images")
     # Load all (path, metadata) pairs
@@ -217,18 +217,17 @@ def build_dataframe(eagle_dir: str,
     # Attach image paths (and optional image bytes)
     df_final = add_images(df_with_s3, include_images=include_images)
 
-    # cleanup: remove metadata_json_path if not needed    
-    for col in ["metadata_json_path", "image_path"]:
-        if col in df_final.columns:
-            df_final.drop(columns=col, inplace=True)
+    # cleanup: remove metadata_json_path if not needed
+    if "metadata_json_path" in df_final.columns:
+        df_final.drop(columns=["metadata_json_path"], inplace=True)
 
     return df_final
 
 def export_parquet(df: pd.DataFrame, output_path: str):
     """
     Exports a DataFrame to a Parquet file.
-    NOTE: If 'image' column exists, it will be dropped because binary data
-    doesn't fit well into Parquet.
+    NOTE: If 'image' column exists, it will be dropped because
+    storing arbitrary binary data in Parquet can be problematic.
     """
     export_df = df.copy()
     if 'image' in export_df.columns:
@@ -241,9 +240,69 @@ def export_parquet(df: pd.DataFrame, output_path: str):
 def export_huggingface(df: pd.DataFrame, repo_id: str, private: bool = False):
     """
     Exports a DataFrame to a Hugging Face dataset (push_to_hub).
-    If 'image' column exists, convert it to the dictionary format
-    that 'datasets.Image' expects, i.e. {"bytes": b"..."}.
-    """    
-    # Use whichever approach you prefer for pushing:
-    import unibox as ub
-    ub.saves(df, f"hf://{repo_id}", private=private)
+    
+    If 'image_path' exists, we convert it to a Hugging Face 'image' column
+    using {"path": ...}, then push the result as a DatasetDict with
+    an 85/15 train/validation split.
+    """
+    from datasets import Dataset, DatasetDict, Features, Value, Image
+
+    # We only need the relevant columns for HF.
+    # In particular, we want to rename 'image_path' -> 'image', with {'path': x}.
+    hf_df = df.copy()
+
+    # If we previously added bytes in 'image', remove them because for HF
+    # we want the recommended approach (using paths).
+    if "image" in hf_df.columns:
+        hf_df.drop(columns=["image"], inplace=True, errors="ignore")
+
+    # If there's no 'image_path', we can just save a tabular dataset. 
+    if "image_path" not in hf_df.columns:
+        print("No 'image_path' found. Uploading DataFrame as-is to HF.")
+        # Just push tabular data
+        # (You can adjust this logic to do something else if needed.)
+        ub.saves(hf_df, f"hf://{repo_id}", private=private)
+        print(f"Exported dataset to Hugging Face: {repo_id}")
+        return
+
+    # Convert the 'image_path' column to the HF-compatible dict
+    hf_df["image"] = hf_df["image_path"].apply(lambda x: {"path": x} if pd.notnull(x) else None)
+    hf_df.drop(columns=["image_path"], inplace=True)
+
+    # Build features. For columns besides 'image', treat them as strings or numeric as feasible.
+    # Here we do a simple approach: if dtypes is object, use Value("string"); else use the numeric type.
+    features_dict = {}
+    for col in hf_df.columns:
+        if col == "image":
+            features_dict[col] = Image()
+        else:
+            # A simple guess: if numeric, we'll store as float or int
+            if pd.api.types.is_integer_dtype(hf_df[col]):
+                features_dict[col] = Value("int64")
+            elif pd.api.types.is_float_dtype(hf_df[col]):
+                features_dict[col] = Value("float64")
+            else:
+                features_dict[col] = Value("string")
+
+    features = Features(features_dict)
+
+    hf_dataset = Dataset.from_pandas(hf_df, features=features)
+    total_len = len(hf_dataset)
+
+    if total_len == 0:
+        print("Warning: No rows in dataset. Nothing to push.")
+        return
+
+    # 85/15 split
+    train_size = int(0.85 * total_len)
+    hf_train = hf_dataset.select(range(train_size))
+    hf_val = hf_dataset.select(range(train_size, total_len))
+
+    dataset_dict = DatasetDict({
+        "train": hf_train,
+        "validation": hf_val
+    })
+
+    # Now push to HF using the standard HF push method
+    dataset_dict.push_to_hub(repo_id, private=private)
+    print(f"Exported dataset with images to Hugging Face: {repo_id}")
