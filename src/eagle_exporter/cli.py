@@ -4,6 +4,8 @@ import os
 import click
 from .core import build_dataframe, export_parquet, export_huggingface
 
+import unibox as ub
+
 
 def export_metadata(eagle_dir, s5cmd, dest, hf_public, include_images):
     """
@@ -21,7 +23,7 @@ def export_metadata(eagle_dir, s5cmd, dest, hf_public, include_images):
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
         export_parquet(df, dest)
     else:
-        export_huggingface(df, dest, private=not hf_public)
+        ub.saves(df, f"hf://{dest}", private=not hf_public)
 
 
 @click.command()
