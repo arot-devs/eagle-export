@@ -321,6 +321,7 @@ def write_df_to_json(df: pd.DataFrame):
     Args:
         df: DataFrame containing the modified metadata.
     """
+    df["star"] = df["star"].fillna("")
     for _, row in tqdm(df.iterrows()):
         json_path = row["metadata_json_path"]
 
