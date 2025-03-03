@@ -1,7 +1,6 @@
 import os
 import json
-import glob
-import io
+
 import pandas as pd
 from typing import Optional, List, Dict, Union, Any
 from datasets import Dataset, DatasetDict, Features, Image as DSImage
@@ -155,6 +154,7 @@ def load_image(image_path: str) -> Optional[bytes]:
         print(f"Error loading image {image_path}: {e}")
         return None
 
+
 def add_images(df: pd.DataFrame, include_images: bool = False) -> pd.DataFrame:
     """
     Adds an 'image_path' column. If include_images=True, also loads the
@@ -192,9 +192,11 @@ def add_images(df: pd.DataFrame, include_images: bool = False) -> pd.DataFrame:
     image_df = pd.DataFrame(image_data)
     return pd.concat([df.reset_index(drop=True), image_df.reset_index(drop=True)], axis=1)
 
+
 def build_dataframe(eagle_dir: str,
                     s5cmd_file: Optional[str] = None,
-                    include_images: bool = False
+                    include_images: bool = False,
+                    keep_paths: bool = False  # New parameter to retain paths
                     ) -> pd.DataFrame:
     """
     Main function to build the final metadata DataFrame from an Eagle library path.
@@ -203,6 +205,7 @@ def build_dataframe(eagle_dir: str,
         eagle_dir: Path to Eagle library directory (folder that contains images/ subdir)
         s5cmd_file: Optional path to an s5cmd file for injecting S3 URIs
         include_images: If True, loads the actual images from disk as bytes (for local usage).
+        keep_paths: If True, retains 'image_path' and 'metadata_json_path'.
     """
     eagle_img_dir = os.path.join(eagle_dir, "images")
     # Load all (path, metadata) pairs
@@ -217,11 +220,13 @@ def build_dataframe(eagle_dir: str,
     # Attach image paths (and optional image bytes)
     df_final = add_images(df_with_s3, include_images=include_images)
 
-    # cleanup: remove metadata_json_path if not needed
-    if "metadata_json_path" in df_final.columns:
-        df_final.drop(columns=["metadata_json_path"], inplace=True)
+    # Remove metadata_json_path and image_path if not needed
+    if not keep_paths:
+        drop_cols = [col for col in ["metadata_json_path", "image_path"] if col in df_final.columns]
+        df_final.drop(columns=drop_cols, inplace=True)
 
     return df_final
+
 
 def export_parquet(df: pd.DataFrame, output_path: str):
     """
@@ -306,3 +311,33 @@ def export_huggingface(df: pd.DataFrame, repo_id: str, private: bool = False):
     # Now push to HF using the standard HF push method
     dataset_dict.push_to_hub(repo_id, private=private)
     print(f"Exported dataset with images to Hugging Face: {repo_id}")
+
+
+def write_df_to_json(df: pd.DataFrame):
+    """
+    Writes a pandas DataFrame back to its original JSON structure.
+    Ensures modifications do not alter the format of the original JSON files.
+
+    Args:
+        df: DataFrame containing the modified metadata.
+    """
+    for _, row in tqdm(df.iterrows()):
+        json_path = row["metadata_json_path"]
+
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(json_path), exist_ok=True)
+
+        # Load original JSON to maintain structure
+        with open(json_path, "r", encoding="utf-8") as f:
+            original_json = json.load(f)
+
+        # Update only modified fields, keeping the original structure
+        for key in row.index:
+            if key not in ["metadata_json_path"]:  # Exclude this helper column
+                original_json[key] = row[key]
+
+        # Save back to JSON with the same structure
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(original_json, f, indent=2, ensure_ascii=False)
+
+    print("JSON files updated successfully, maintaining original structure.")
